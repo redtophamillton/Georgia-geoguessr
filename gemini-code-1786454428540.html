@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GeoGuessr: Find Georgia!</title>
+    
+    <!-- Leaflet CSS for Map Styling -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        header {
+            background-color: #2c3e50;
+            color: white;
+            width: 100%;
+            text-align: center;
+            padding: 1rem;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+
+        h1 {
+            margin: 0 0 0.5rem 0;
+            font-size: 1.8rem;
+        }
+
+        p {
+            margin: 0;
+            font-size: 0.95rem;
+            color: #ecf0f1;
+        }
+
+        #game-container {
+            width: 90%;
+            max-width: 1000px;
+            margin: 20px auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        #map {
+            height: 500px;
+            width: 100%;
+            border-radius: 10px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.15);
+            cursor: crosshair;
+        }
+
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .card {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.08);
+        }
+
+        .card-title {
+            font-size: 0.85rem;
+            color: #7f8c8d;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+
+        .card-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .btn-reset {
+            background-color: #27ae60;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+            align-self: center;
+        }
+
+        .btn-reset:hover {
+            background-color: #219653;
+        }
+
+        /* Custom marker styles */
+        .target-label {
+            background: #27ae60;
+            color: white;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-weight: bold;
+            border: 1px solid white;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>GeoGuessr: Find Georgia!</h1>
+        <p>Click anywhere on the world map to drop a pin and guess where the US State of Georgia is located.</p>
+    </header>
+
+    <div id="game-container">
+        <div id="map"></div>
+
+        <div class="dashboard">
+            <div class="card">
+                <div class="card-title">Distance Off</div>
+                <div class="card-value" id="distance-display">--</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Last Score</div>
+                <div class="card-value" id="score-display">--</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Best Score</div>
+                <div class="card-value" id="high-score-display">0</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Guesses Made</div>
+                <div class="card-value" id="attempts-display">0</div>
+            </div>
+        </div>
+
+        <button class="btn-reset" onclick="resetGame()">Try Again / Clear Pins</button>
+    </div>
+
+    <!-- Leaflet JS for Map Interactivity -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // Coordinates for Macon, Georgia (Geographic Center of GA)
+        const GA_LAT = 32.8407;
+        const GA_LNG = -83.6324;
+
+        let map;
+        let guessMarker = null;
+        let targetMarker = null;
+        let connectionLine = null;
+
+        let attempts = 0;
+        let highScore = 0;
+
+        // Initialize Map
+        function initMap() {
+            // Center globally initially
+            map = L.map('map', {
+                center: [20, 0],
+                zoom: 2,
+                minZoom: 2,
+                maxBounds: [[-90, -180], [90, 180]]
+            });
+
+            // Clean tile layer without state/country labels for a true "GeoGuessr" feel
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                subdomains: 'abcd',
+                maxZoom: 19
+            }).addTo(map);
+
+            // Handle Click Event
+            map.on('click', handleGuess);
+        }
+
+        // Calculate Great Circle Distance in Miles using Haversine Formula
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            const R = 3958.8; // Radius of Earth in miles
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+                      
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c; // Distance in miles
+        }
+
+        // Handle User Click/Guess
+        function handleGuess(e) {
+            const guessLat = e.latlng.lat;
+            const guessLng = e.latlng.lng;
+
+            // Calculate Distance
+            const distance = calculateDistance(guessLat, guessLng, GA_LAT, GA_LNG);
+
+            // Calculate Score (Max 5000 points; drops to 0 at ~10,000 miles away)
+            const score = Math.max(0, Math.round(5000 * Math.exp(-distance / 2000)));
+
+            // Update Statistics
+            attempts++;
+            if (score > highScore) {
+                highScore = score;
+            }
+
+            // Clean up old markers and line
+            if (guessMarker) map.removeLayer(guessMarker);
+            if (targetMarker) map.removeLayer(targetMarker);
+            if (connectionLine) map.removeLayer(connectionLine);
+
+            // Add Guess Marker (Red)
+            guessMarker = L.marker([guessLat, guessLng]).addTo(map)
+                .bindPopup("Your Guess").openPopup();
+
+            // Add Target Marker for Georgia (Green)
+            targetMarker = L.circleMarker([GA_LAT, GA_LNG], {
+                color: '#27ae60',
+                fillColor: '#2ec4b6',
+                fillOpacity: 0.8,
+                radius: 10
+            }).addTo(map).bindPopup("<b>Georgia (USA)</b>");
+
+            // Draw line between guess and target
+            connectionLine = L.polyline([
+                [guessLat, guessLng],
+                [GA_LAT, GA_LNG]
+            ], {
+                color: '#e74c3c',
+                weight: 3,
+                dashArray: '5, 10'
+            }).addTo(map);
+
+            // Zoom map out to show both points clearly
+            const bounds = L.latLngBounds([
+                [guessLat, guessLng],
+                [GA_LAT, GA_LNG]
+            ]);
+            map.fitBounds(bounds, { padding: [50, 50] });
+
+            // Update Dashboard Displays
+            document.getElementById('distance-display').innerText = `${Math.round(distance).toLocaleString()} mi`;
+            document.getElementById('score-display').innerText = `${score} / 5000`;
+            document.getElementById('high-score-display').innerText = `${highScore}`;
+            document.getElementById('attempts-display').innerText = attempts;
+        }
+
+        // Reset the Map View for a new attempt
+        function resetGame() {
+            if (guessMarker) map.removeLayer(guessMarker);
+            if (targetMarker) map.removeLayer(targetMarker);
+            if (connectionLine) map.removeLayer(connectionLine);
+
+            document.getElementById('distance-display').innerText = '--';
+            document.getElementById('score-display').innerText = '--';
+
+            map.setView([20, 0], 2);
+        }
+
+        // Load the map on page startup
+        window.onload = initMap;
+    </script>
+</body>
+</html>
